@@ -42,6 +42,8 @@ const App = () => {
 
   const sendMessageToLLM = () => {
     const userInput = textBoxRef.current.value;
+    //.trim() checks if the userInput is not empty
+    // sending an empty message to the LLM is not ideal
     if (userInput.trim() && sessionRef.current) {
       sessionRef.current.send(`TEXT TO AUTOCOMPLETE: ${userInput}`);
       setPauseStatus('sent_likely_pause');
@@ -53,6 +55,8 @@ const App = () => {
     setPauseStatus('injected_true_pause');
   };
 
+  // handleKeyDown and handleKeyPress naming is confusing
+  // come up with something better
   const handleKeyDown = () => {
     const now = Date.now();
     const { newIkiHistory, newMiki } = handleKeyPress(now, lastTimestampRef.current, ikiHistory);
