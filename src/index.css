@@ -236,8 +236,7 @@ kbd {
   line-height: 1.6;
   letter-spacing: inherit;
   white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 .composer__mirror {
