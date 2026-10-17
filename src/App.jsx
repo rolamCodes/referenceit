@@ -1,148 +1,48 @@
-import { useState, useRef, useEffect } from "react";
-import { model, db } from "../firebase";
-import { collection, getDocs } from "firebase/firestore";
+import { useState } from "react";
+import { Composer } from "./components/Composer";
+import { ReferencePanel } from "./components/ReferencePanel";
 
-const SLIDING_WINDOW_SIZE = 30;
-const LIKELY_PAUSE_MULTIPLIER = 1.9;
-const PAUSE_MULTIPLIER = 3;
+const formatCount = (n) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
-const updateIkiHistory = (iki, currentHistory) => {
-  const newHistory = [...currentHistory, iki];
-  if (newHistory.length > SLIDING_WINDOW_SIZE) newHistory.shift();
-  return newHistory;
-};
-
-const calculateMiki = (ikiHistory) => {
-  if (ikiHistory.length === 0) return 0;
-  const sum = ikiHistory.reduce((a, b) => a + b, 0);
-  return sum / ikiHistory.length;
-};
-
-const handleKeyPress = (timestamp, lastTimestamp, ikiHistory) => {
-  if (lastTimestamp === null) return { newIkiHistory: ikiHistory, newMiki: calculateMiki(ikiHistory) };
-  const iki = timestamp - lastTimestamp;
-  const newIkiHistory = updateIkiHistory(iki, ikiHistory);
-  const newMiki = calculateMiki(newIkiHistory);
-  return { newIkiHistory, newMiki };
-};
-
-const App = () => {
-  const [geminiOutput, setGeminiOutput] = useState("");
-  const [transcripts, setTranscripts] = useState([]);
-
-  const [ikiHistory, setIkiHistory] = useState([]);
-  const [miki, setMiki] = useState(0);
-  const [pauseStatus, setPauseStatus] = useState("no_pause");
-
-  const sessionRef = useRef();
-  const textBoxRef = useRef();
-  const lastTimestampRef = useRef(null);
-  const likelyTimerRef = useRef(null);
-  const trueTimerRef = useRef(null);
-
-  const sendMessageToLLM = () => {
-    const userInput = textBoxRef.current.value;
-    //.trim() checks if the userInput is not empty
-    // sending an empty message to the LLM is not ideal
-    if (userInput.trim() && sessionRef.current) {
-      sessionRef.current.send(`TEXT TO AUTOCOMPLETE: ${userInput}`);
-      setPauseStatus('sent_likely_pause');
-    }
-  };
-
-  const injectLLMResponse = () => {
-    handleInjectSuggestion();
-    setPauseStatus('injected_true_pause');
-  };
-
-  // handleKeyDown and handleKeyPress naming is confusing
-  // come up with something better
-  const handleKeyDown = () => {
-    const now = Date.now();
-    const { newIkiHistory, newMiki } = handleKeyPress(now, lastTimestampRef.current, ikiHistory);
-
-    lastTimestampRef.current = now;
-    setIkiHistory(newIkiHistory);
-    setMiki(newMiki);
-
-    if (likelyTimerRef.current) clearTimeout(likelyTimerRef.current);
-    if (trueTimerRef.current) clearTimeout(trueTimerRef.current);
-
-    const likelyThreshold = newMiki * LIKELY_PAUSE_MULTIPLIER;
-    const trueThreshold = newMiki * PAUSE_MULTIPLIER;
-
-    likelyTimerRef.current = setTimeout(sendMessageToLLM, likelyThreshold);
-    trueTimerRef.current = setTimeout(injectLLMResponse, trueThreshold);
-  };
-
-  const handleSelectTranscript = (transcript) => {
-    const text = transcript.data.textContent;
-    sessionRef.current.send(
-      `INSTRUCTIONS: You are an autocomplete machine. You're given context and some text. You return the next few words based on the context, nothing else.
-      DO NOT: Include the given text in your completion.
-      CONTEXT: ${text}`, false);
-  };
-
-  const handleInjectSuggestion = () => {
-    const prev = textBoxRef.current.value;
-    textBoxRef.current.value = prev + geminiOutput;
-    setGeminiOutput('');
-  };
-
-  useEffect(() => {
-    const initGeminiLive = async () => {
-      const session = await model.connect();
-      sessionRef.current = session;
-      const messages = session.receive();
-      for await (const message of messages) {
-        if (message.type === "serverContent" && !message.turnComplete) {
-          const parts = message.modelTurn?.parts;
-          if (parts) {
-            setGeminiOutput((prev) => {
-              let next;
-              parts.map((part) => { next = prev + part.text; });
-              return next;
-            });
-          }
-        }
-      }
-    };
-
-    const fetchTranscripts = async () => {
-      const colRef = collection(db, 'users', '1', 'transcripts');
-      const colSnap = await getDocs(colRef);
-      const newTranscripts = [];
-      colSnap.forEach((doc) => newTranscripts.push({ id: doc.id, data: doc.data() }));
-      setTranscripts(newTranscripts);
-    };
-
-    initGeminiLive();
-    fetchTranscripts();
-  }, []);
+export default function App() {
+  const [text, setText] = useState("");
+  const [reference, setReference] = useState("");
+  const [panelOpen, setPanelOpen] = useState(false);
 
   return (
-    <div className="p-4 space-y-4">
-      <form onSubmit={(e) => e.preventDefault()}>
-        <h1>reference:it</h1>
-        <p>Transcripts</p>
-        <ul>
-          {transcripts.map((transcript) => (
-            <li key={transcript.id} style={{ cursor: "pointer" }} onClick={() => handleSelectTranscript(transcript)}>
-              {transcript.data.label}
-            </li>
-          ))}
-        </ul>
-        <textarea
-          ref={textBoxRef}
-          name="userInput"
-          placeholder="Start typing..."
-          onKeyDown={handleKeyDown}
-        />
-      </form>
-      <p>Average interval (miki): {miki.toFixed(2)} ms</p>
-      <p>Pause status: {pauseStatus}</p>
+    <div className={`app ${panelOpen ? "app--panel-open" : ""}`}>
+      <header className="topbar">
+        <div className="brand">
+          reference<span className="brand__colon">:</span>it
+        </div>
+        <button
+          type="button"
+          className={`chip ${reference ? "chip--active" : ""}`}
+          onClick={() => setPanelOpen((open) => !open)}
+          aria-expanded={panelOpen}
+        >
+          <span className="chip__dot" aria-hidden="true" />
+          {reference ? `Reference · ${formatCount(reference.length)} chars` : "Add reference"}
+        </button>
+      </header>
+
+      <main className="stage">
+        <Composer text={text} onTextChange={setText} reference={reference} />
+        <p className="hints">
+          <kbd>/</kbd> add suggestion
+          <span className="hints__sep">·</span>
+          keep typing to dismiss
+          <span className="hints__sep">·</span>
+          <kbd>Esc</kbd> dismiss
+        </p>
+      </main>
+
+      <ReferencePanel
+        open={panelOpen}
+        onClose={() => setPanelOpen(false)}
+        reference={reference}
+        onReferenceChange={setReference}
+      />
     </div>
   );
-};
-
-export default App;
+}
