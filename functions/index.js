@@ -1,32 +1,53 @@
-/**
- * Import function triggers from their respective submodules:
- *
- * const {onCall} = require("firebase-functions/v2/https");
- * const {onDocumentWritten} = require("firebase-functions/v2/firestore");
- *
- * See a full list of supported triggers at https://firebase.google.com/docs/functions
- */
-
-const {setGlobalOptions} = require("firebase-functions");
-const {onRequest} = require("firebase-functions/https");
+const { setGlobalOptions } = require("firebase-functions/v2");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const { runSuggestPipeline } = require("./suggest/pipeline");
 
-// For cost control, you can set the maximum number of containers that can be
-// running at the same time. This helps mitigate the impact of unexpected
-// traffic spikes by instead downgrading performance. This limit is a
-// per-function limit. You can override the limit for each function using the
-// `maxInstances` option in the function's options, e.g.
-// `onRequest({ maxInstances: 5 }, (req, res) => { ... })`.
-// NOTE: setGlobalOptions does not apply to functions using the v1 API. V1
-// functions should each use functions.runWith({ maxInstances: 10 }) instead.
-// In the v1 API, each function can only serve one request per container, so
-// this will be the maximum concurrent request count.
-setGlobalOptions({ maxInstances: 10 });
+const TYPESAFE_API_KEY = defineSecret("TYPESAFE_API_KEY");
+const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 
-// Create and deploy your first functions
-// https://firebase.google.com/docs/functions/get-started
+const MAX_TEXT_CHARS = 20_000;
+const MAX_REFERENCE_CHARS = 60_000;
 
-// exports.helloWorld = onRequest((request, response) => {
-//   logger.info("Hello logs!", {structuredData: true});
-//   response.send("Hello from Firebase!");
-// });
+setGlobalOptions({ region: "europe-west1", maxInstances: 10 });
+
+exports.suggest = onCall(
+    {
+      secrets: [TYPESAFE_API_KEY, GEMINI_API_KEY],
+      timeoutSeconds: 30,
+      memory: "256MiB",
+    },
+    async (request) => {
+      const { text, reference } = request.data ?? {};
+
+      if (typeof text !== "string" || !text.trim()) {
+        throw new HttpsError("invalid-argument", "`text` must be a non-empty string.");
+      }
+      if (text.length > MAX_TEXT_CHARS) {
+        throw new HttpsError("invalid-argument", `\`text\` exceeds ${MAX_TEXT_CHARS} characters.`);
+      }
+      if (reference != null && typeof reference !== "string") {
+        throw new HttpsError("invalid-argument", "`reference` must be a string when provided.");
+      }
+      if (reference && reference.length > MAX_REFERENCE_CHARS) {
+        throw new HttpsError(
+            "invalid-argument",
+            `\`reference\` exceeds ${MAX_REFERENCE_CHARS} characters.`,
+        );
+      }
+
+      try {
+        return await runSuggestPipeline({
+          text,
+          reference: reference ?? "",
+          typesafeApiKey: TYPESAFE_API_KEY.value(),
+          geminiApiKey: GEMINI_API_KEY.value(),
+          logger,
+        });
+      } catch (error) {
+        logger.error("suggest pipeline failed", { message: error?.message, name: error?.name });
+        throw new HttpsError("internal", "Suggestion pipeline failed.");
+      }
+    },
+);
